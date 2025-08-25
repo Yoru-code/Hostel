@@ -273,12 +273,28 @@ async function seedDatabase() {
     const users = await User.create(sampleUsers);
     console.log(`Created ${users.length} users`);
 
-    // Create rooms
-    const rooms = await Room.create(sampleRooms);
+    // Create rooms for each user
+    const roomsWithUsers = [];
+    for (const user of users) {
+      const userRooms = sampleRooms.map(room => ({
+        ...room,
+        userId: user._id
+      }));
+      roomsWithUsers.push(...userRooms);
+    }
+    const rooms = await Room.create(roomsWithUsers);
     console.log(`Created ${rooms.length} rooms`);
 
-    // Create inventory items
-    const inventory = await Inventory.create(sampleInventory);
+    // Create inventory items for each user
+    const inventoryWithUsers = [];
+    for (const user of users) {
+      const userInventory = sampleInventory.map(item => ({
+        ...item,
+        userId: user._id
+      }));
+      inventoryWithUsers.push(...userInventory);
+    }
+    const inventory = await Inventory.create(inventoryWithUsers);
     console.log(`Created ${inventory.length} inventory items`);
 
     console.log('Database seeding completed successfully!');

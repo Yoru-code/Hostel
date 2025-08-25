@@ -196,7 +196,11 @@ router.delete('/:block/:number', async (req, res) => {
   try {
     const { block, number } = req.params;
 
-    const room = await Room.findOne({ block, number: parseInt(number) });
+    const room = await Room.findOne({ 
+      block, 
+      number: parseInt(number),
+      userId: req.user._id
+    });
 
     if (!room) {
       return res.status(404).json({
@@ -206,14 +210,25 @@ router.delete('/:block/:number', async (req, res) => {
     }
 
     // Check if room is occupied
-    if (room.occupants.length > 0) {
+    const occupiedTrainees = await Trainee.find({
+      roomNumber: parseInt(number),
+      block: block,
+      status: 'staying',
+      userId: req.user._id
+    });
+
+    if (occupiedTrainees.length > 0) {
       return res.status(400).json({
         success: false,
         message: 'Cannot delete occupied room. Please checkout all trainees first.'
       });
     }
 
-    await room.deleteOne();
+    await Room.deleteOne({ 
+      block, 
+      number: parseInt(number),
+      userId: req.user._id
+    });
 
     res.json({
       success: true,

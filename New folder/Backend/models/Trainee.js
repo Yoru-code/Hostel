@@ -49,6 +49,11 @@ const traineeSchema = new mongoose.Schema({
     unique: true,
     required: true
   },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
   name: {
     type: String,
     required: [true, 'Trainee name is required'],

@@ -341,6 +341,8 @@ router.get('/trends/occupancy', async (req, res) => {
     const days = parseInt(period);
 
     const blockFilter = block && block !== 'ALL' ? { block } : {};
+    const userFilter = { userId: req.user._id };
+    const combinedFilter = { ...blockFilter, ...userFilter };
 
     // Generate date range
     const dateRange = [];
@@ -354,7 +356,7 @@ router.get('/trends/occupancy', async (req, res) => {
         const nextDay = moment(date).add(1, 'day').toDate();
         
         const occupiedCount = await Trainee.countDocuments({
-          ...blockFilter,
+          ...combinedFilter,
           checkInDate: { $lte: date },
           $or: [
             { checkOutDate: { $gte: nextDay } },
@@ -364,7 +366,7 @@ router.get('/trends/occupancy', async (req, res) => {
         });
 
         const totalRooms = await Room.countDocuments({
-          ...blockFilter,
+          ...combinedFilter,
           status: { $in: ['vacant', 'occupied'] }
         });
 

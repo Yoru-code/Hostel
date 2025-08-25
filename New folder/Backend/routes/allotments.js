@@ -75,7 +75,8 @@ router.post('/allocate', async (req, res) => {
       for (const amenity of traineeData.amenities) {
         try {
           const inventoryItem = await Inventory.findOne({ 
-            name: { $regex: new RegExp(amenity.name, 'i') }
+            name: { $regex: new RegExp(amenity.name, 'i') },
+            userId: req.user._id
           });
           
           if (inventoryItem) {
@@ -142,7 +143,8 @@ router.post('/deallocate', async (req, res) => {
     if (trainee.roomNumber && trainee.block) {
       const room = await Room.findOne({
         number: trainee.roomNumber,
-        block: trainee.block
+        block: trainee.block,
+        userId: req.user._id
       });
 
       if (room) {

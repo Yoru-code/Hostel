@@ -23,6 +23,9 @@ router.get('/', async (req, res) => {
     // Build filter object
     const filter = {};
     
+    // Add user filter for data isolation
+    filter.userId = req.user._id;
+    
     if (status) filter.status = status;
     if (block) filter.block = block;
     if (designation) filter.designation = designation;
@@ -85,6 +88,7 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const trainee = await Trainee.findOne({
+      userId: req.user._id,
       $or: [
         { _id: req.params.id },
         { traineeId: req.params.id }
@@ -120,7 +124,8 @@ router.post('/', validate(traineeSchema), async (req, res) => {
     if (traineeData.roomNumber) {
       const room = await Room.findOne({
         number: traineeData.roomNumber,
-        block: traineeData.block || getBlockFromRoomNumber(traineeData.roomNumber)
+        block: traineeData.block || getBlockFromRoomNumber(traineeData.roomNumber),
+        userId: req.user._id
       });
 
       if (!room) {
@@ -138,30 +143,38 @@ router.post('/', validate(traineeSchema), async (req, res) => {
       }
     }
 
-    const trainee = new Trainee(traineeData);
+    const trainee = new Trainee({
+      ...traineeData,
+      userId: req.user._id
+    });
     await trainee.save();
 
     // Update room occupancy if room is assigned
     if (trainee.roomNumber && trainee.block) {
-      await Room.findOneAndUpdate(
-        { number: trainee.roomNumber, block: trainee.block },
-        {
-          $push: {
-            occupants: {
-              traineeId: trainee.traineeId,
-              bedNumber: trainee.bedNumber
-            }
-          },
-          status: 'occupied'
-        }
-      );
+      const room = await Room.findOne({
+        number: trainee.roomNumber,
+        block: trainee.block,
+        userId: req.user._id
+      });
+
+      if (room) {
+        room.occupants.push({
+          traineeId: trainee.traineeId,
+          bedNumber: trainee.bedNumber
+        });
+        room.status = 'occupied';
+        await room.save();
+      }
     }
 
     // Handle amenity allocation
     if (trainee.amenities && trainee.amenities.length > 0) {
       for (const amenity of trainee.amenities) {
         try {
-          const inventoryItem = await Inventory.findOne({ name: amenity.name });
+          const inventoryItem = await Inventory.findOne({ 
+            name: amenity.name,
+            userId: req.user._id
+          });
           if (inventoryItem) {
             await inventoryItem.allocate(
               amenity.quantity,
@@ -194,6 +207,7 @@ router.post('/', validate(traineeSchema), async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const trainee = await Trainee.findOne({
+      userId: req.user._id,
       $or: [
         { _id: req.params.id },
         { traineeId: req.params.id }
@@ -218,35 +232,58 @@ router.put('/:id', async (req, res) => {
     if (oldRoomNumber !== trainee.roomNumber || oldBlock !== trainee.block) {
       // Remove from old room
       if (oldRoomNumber && oldBlock) {
-        await Room.findOneAndUpdate(
-          { number: oldRoomNumber, block: oldBlock },
-          {
-            $pull: { occupants: { traineeId: trainee.traineeId } }
-          }
-        );
+        const oldRoom = await Room.findOne({
+          number: oldRoomNumber,
+          block: oldBlock,
+          userId: req.user._id
+        });
 
-        // Update old room status if no occupants left
-        const oldRoom = await Room.findOne({ number: oldRoomNumber, block: oldBlock });
-        if (oldRoom && oldRoom.occupants.length === 0) {
-          oldRoom.status = 'vacant';
+        if (oldRoom) {
+          oldRoom.occupants = oldRoom.occupants.filter(
+            occupant => occupant.traineeId !== trainee.traineeId
+          );
+          
+          // Update old room status if no occupants left
+          if (oldRoom.occupants.length === 0) {
+            oldRoom.status = 'vacant';
+          }
           await oldRoom.save();
         }
       }
 
       // Add to new room
       if (trainee.roomNumber && trainee.block) {
-        await Room.findOneAndUpdate(
-          { number: trainee.roomNumber, block: trainee.block },
-          {
-            $push: {
-              occupants: {
-                traineeId: trainee.traineeId,
-                bedNumber: trainee.bedNumber
-              }
-            },
-            status: 'occupied'
-          }
+        const newRoom = await Room.findOne({
+          number: trainee.roomNumber,
+          block: trainee.block,
+          userId: req.user._id
+        });
+
+        if (newRoom) {
+          newRoom.occupants.push({
+            traineeId: trainee.traineeId,
+            bedNumber: trainee.bedNumber
+          });
+          newRoom.status = 'occupied';
+          await newRoom.save();
+        }
+      }
+    } else if (req.body.name && trainee.status === "staying" && trainee.roomNumber) {
+      // Update trainee name in room data
+      const room = await Room.findOne({
+        number: trainee.roomNumber,
+        block: trainee.block,
+        userId: req.user._id
+      });
+
+      if (room) {
+        const occupantIndex = room.occupants.findIndex(
+          occupant => occupant.traineeId === trainee.traineeId
         );
+        if (occupantIndex !== -1) {
+          // Update the occupant info if needed
+          await room.save();
+        }
       }
     }
 
@@ -268,6 +305,7 @@ router.put('/:id', async (req, res) => {
 router.put('/:id/checkout', async (req, res) => {
   try {
     const trainee = await Trainee.findOne({
+      userId: req.user._id,
       $or: [
         { _id: req.params.id },
         { traineeId: req.params.id }
@@ -288,11 +326,13 @@ router.put('/:id/checkout', async (req, res) => {
       });
     }
 
+    // Store room info before updating trainee
+    const oldRoomNumber = trainee.roomNumber;
+    const oldBlock = trainee.block;
+
     // Update trainee status
     trainee.status = 'checked_out';
     trainee.checkOutDate = new Date();
-    const oldRoomNumber = trainee.roomNumber;
-    const oldBlock = trainee.block;
     trainee.roomNumber = null;
     trainee.block = null;
     trainee.bedNumber = null;
@@ -301,17 +341,23 @@ router.put('/:id/checkout', async (req, res) => {
 
     // Update room occupancy
     if (oldRoomNumber && oldBlock) {
-      await Room.findOneAndUpdate(
-        { number: oldRoomNumber, block: oldBlock },
-        {
-          $pull: { occupants: { traineeId: trainee.traineeId } }
-        }
-      );
+      const room = await Room.findOne({
+        number: oldRoomNumber,
+        block: oldBlock,
+        userId: req.user._id
+      });
 
-      // Update room status if no occupants left
-      const room = await Room.findOne({ number: oldRoomNumber, block: oldBlock });
-      if (room && room.occupants.length === 0) {
-        room.status = 'vacant';
+      if (room) {
+        // Remove trainee from room occupants
+        room.occupants = room.occupants.filter(
+          occupant => occupant.traineeId !== trainee.traineeId
+        );
+        
+        // Update room status if no occupants left
+        if (room.occupants.length === 0) {
+          room.status = 'vacant';
+        }
+        
         await room.save();
       }
     }
@@ -320,7 +366,10 @@ router.put('/:id/checkout', async (req, res) => {
     if (trainee.amenities && trainee.amenities.length > 0) {
       for (const amenity of trainee.amenities) {
         try {
-          const inventoryItem = await Inventory.findOne({ name: amenity.name });
+          const inventoryItem = await Inventory.findOne({ 
+            name: amenity.name,
+            userId: req.user._id
+          });
           if (inventoryItem) {
             await inventoryItem.returnItem(
               amenity.quantity,
@@ -353,6 +402,7 @@ router.put('/:id/checkout', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const trainee = await Trainee.findOne({
+      userId: req.user._id,
       $or: [
         { _id: req.params.id },
         { traineeId: req.params.id }
@@ -368,17 +418,22 @@ router.delete('/:id', async (req, res) => {
 
     // Remove from room if currently staying
     if (trainee.roomNumber && trainee.block && trainee.status === 'staying') {
-      await Room.findOneAndUpdate(
-        { number: trainee.roomNumber, block: trainee.block },
-        {
-          $pull: { occupants: { traineeId: trainee.traineeId } }
-        }
-      );
+      const room = await Room.findOne({
+        number: trainee.roomNumber,
+        block: trainee.block,
+        userId: req.user._id
+      });
 
-      // Update room status if no occupants left
-      const room = await Room.findOne({ number: trainee.roomNumber, block: trainee.block });
-      if (room && room.occupants.length === 0) {
-        room.status = 'vacant';
+      if (room) {
+        room.occupants = room.occupants.filter(
+          occupant => occupant.traineeId !== trainee.traineeId
+        );
+        
+        // Update room status if no occupants left
+        if (room.occupants.length === 0) {
+          room.status = 'vacant';
+        }
+        
         await room.save();
       }
     }
@@ -387,7 +442,10 @@ router.delete('/:id', async (req, res) => {
     if (trainee.amenities && trainee.amenities.length > 0) {
       for (const amenity of trainee.amenities) {
         try {
-          const inventoryItem = await Inventory.findOne({ name: amenity.name });
+          const inventoryItem = await Inventory.findOne({ 
+            name: amenity.name,
+            userId: req.user._id
+          });
           if (inventoryItem) {
             await inventoryItem.returnItem(
               amenity.quantity,
@@ -430,7 +488,11 @@ router.get('/block/:block', async (req, res) => {
       });
     }
 
-    const trainees = await Trainee.find({ block, status }).sort({ roomNumber: 1 });
+    const trainees = await Trainee.find({ 
+      block, 
+      status,
+      userId: req.user._id 
+    }).sort({ roomNumber: 1 });
 
     res.json({
       success: true,

@@ -458,7 +458,10 @@ router.post('/:id/restock', async (req, res) => {
       });
     }
 
-    const item = await Inventory.findById(req.params.id);
+    const item = await Inventory.findOne({
+      _id: req.params.id,
+      userId: req.user._id
+    });
     if (!item) {
       return res.status(404).json({
         success: false,

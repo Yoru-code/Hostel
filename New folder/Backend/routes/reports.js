@@ -515,6 +515,7 @@ router.get('/dashboard', async (req, res) => {
 
     // Get trainee statistics
     const traineeStats = await Trainee.aggregate([
+      { $match: { userId: req.user._id } },
       {
         $group: {
           _id: '$status',
@@ -525,11 +526,13 @@ router.get('/dashboard', async (req, res) => {
 
     // Get inventory alerts
     const inventoryAlerts = await Inventory.countDocuments({
+      userId: req.user._id,
       $expr: { $lte: ['$availableQuantity', '$minimumThreshold'] }
     });
 
     // Get recent activities (last 7 days)
     const recentActivities = await Trainee.find({
+      userId: req.user._id,
       $or: [
         { checkInDate: { $gte: moment().subtract(7, 'days').toDate() } },
         { checkOutDate: { $gte: moment().subtract(7, 'days').toDate() } }
@@ -541,6 +544,7 @@ router.get('/dashboard', async (req, res) => {
 
     // Get upcoming check-outs (next 7 days)
     const upcomingCheckouts = await Trainee.find({
+      userId: req.user._id,
       status: { $in: ['staying', 'extended'] },
       expectedCheckOutDate: {
         $gte: new Date(),
